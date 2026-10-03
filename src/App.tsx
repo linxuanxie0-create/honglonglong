@@ -29,7 +29,7 @@ import CustomerResearchStats from './components/customer-research-stats'
 import type { CustomerResearchDraft, CustomerResearchRecord } from './lib/customer-research'
 import { labelFor } from './lib/customer-research'
 import { loadCustomerResearch, saveCustomerResearch } from './lib/customer-research-data'
-import { isSupabaseConfigured, supabase } from './lib/supabase'
+import { isSupabaseConfigured, logSupabaseError, supabase } from './lib/supabase'
 
 type SaleCategory = '实体车' | '头盔' | '配件' | '改装' | '其他'
 type Sale = { id: number; category: SaleCategory; name: string; amount: number; time: string }
@@ -133,7 +133,8 @@ function App() {
       const { data: anonymous, error: signInError } = await supabase.auth.signInAnonymously()
       if (signInError) throw signInError
       setUser(anonymous.user)
-    } catch {
+    } catch (error) {
+      logSupabaseError('anonymous sign-in / session', error)
       setUser(null)
       setAuthError('匿名云端连接失败。请确认 Supabase 已开启匿名登录，并检查网络后重试。')
     } finally {
@@ -168,12 +169,16 @@ function App() {
       try {
         const { data, error } = await supabase.from('daily_records').select('note').eq('record_date', recordDate).maybeSingle()
         if (!active) return
-        if (error) setJournalError('读取今日记录失败。请确认数据库迁移已运行，然后重试。')
+        if (error) {
+          logSupabaseError('daily_records select', error)
+          setJournalError('读取今日记录失败。请确认数据库迁移已运行，然后重试。')
+        }
         else {
           setNote(data?.note ?? '')
           setJournalLoaded(true)
         }
-      } catch {
+      } catch (error) {
+        logSupabaseError('daily_records select', error)
         if (active) setJournalError('网络连接失败，检查网络后刷新页面重试。')
       } finally {
         if (active) setJournalLoading(false)
@@ -199,8 +204,14 @@ function App() {
     setCustomerLoading(true)
     setCustomerError('')
     void loadCustomerResearch(user)
-      .then((records) => { if (active) setNeeds(records) })
-      .catch(() => { if (active) setCustomerError('顾客调研读取失败。请确认数据库迁移已运行，然后重试。') })
+      .then((records) => {
+        console.info('[Supabase] customer_needs read succeeded', { rowCount: records.length })
+        if (active) setNeeds(records)
+      })
+      .catch((error) => {
+        logSupabaseError('customer_needs select', error)
+        if (active) setCustomerError('顾客调研读取失败。请确认数据库迁移已运行，然后重试。')
+      })
       .finally(() => { if (active) setCustomerLoading(false) })
     return () => { active = false }
   }, [user, authLoading, authError])
@@ -223,13 +234,15 @@ function App() {
         { onConflict: 'user_id,record_date' },
       )
       if (error) {
+        logSupabaseError('daily_records upsert', error)
         setJournalError('保存失败。请检查数据库迁移和网络连接后重试。')
         return false
       }
       setJournalLoaded(true)
       notify('今日记录已保存到云端。')
       return true
-    } catch {
+    } catch (error) {
+      logSupabaseError('daily_records upsert', error)
       setJournalError('保存失败。请检查数据库迁移和网络连接后重试。')
       return false
     } finally {
@@ -250,7 +263,8 @@ function App() {
         setCustomerError('')
         notify('顾客调研已保存到云端。')
         return true
-      } catch {
+      } catch (error) {
+        logSupabaseError('customer_needs insert', error)
         setCustomerError('顾客调研保存失败。请检查新迁移是否已运行，然后重试。')
         notify('保存失败，表单内容仍保留。')
         return false
@@ -270,8 +284,11 @@ function App() {
     setCustomerLoading(true)
     setCustomerError('')
     try {
-      setNeeds(await loadCustomerResearch(user))
-    } catch {
+      const records = await loadCustomerResearch(user)
+      console.info('[Supabase] customer_needs read succeeded', { rowCount: records.length })
+      setNeeds(records)
+    } catch (error) {
+      logSupabaseError('customer_needs select', error)
       setCustomerError('顾客调研读取失败。请确认数据库迁移已运行，然后重试。')
     } finally {
       setCustomerLoading(false)
