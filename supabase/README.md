@@ -6,11 +6,11 @@ This project uses the Supabase project `znbycwnxtcnuyngokpar`.
 
 Open the project's SQL Editor and run the migration in `migrations/20261002090000_create_business_tables.sql`. It creates:
 
-- `daily_records`: one free-text store journal entry per day and signed-in user.
+- `daily_records`: one free-text store journal entry per day and Supabase user.
 - `sales`: dated motorcycle, helmet, accessory, modification, and other sales. Refunds are negative amounts; motorcycles store a model only.
 - `customer_needs`: a date and the two free-text fields for purchase reason and possible future needs.
 
-Row Level Security is enabled on every table. Policies permit authenticated users to read and change rows where `user_id` matches their own Supabase user ID. The migration adds no example customer records.
+Row Level Security is enabled on every table. Policies permit authenticated users, including anonymous sessions, to read and change rows where `user_id` matches their own Supabase user ID. The migration adds no example customer records.
 
 ## Configure the local app
 
@@ -18,6 +18,6 @@ In Supabase, open **Project Settings → API Keys** and copy the public `anon` k
 
 Never put a `service_role` or secret key in a `VITE_` variable or browser code.
 
-The app's sign-in and cloud data flows are separate later build steps; these tables and policies prepare the database without exposing any records before sign-in is implemented.
+The app creates an anonymous Supabase session automatically; the owner does not enter an email or password. Enable **Authentication → Sign In / Providers → Allow anonymous sign-ins** in the Supabase dashboard. Anonymous sessions use the `authenticated` database role, so the `user_id = auth.uid()` policies continue to isolate each browser's records.
 
-The app sends a password-free sign-in link to the email address entered by the owner. In **Authentication → URL Configuration**, add the local app URL (`http://127.0.0.1:5174`) to the allowed redirect URLs so the email link can return to the local workbench.
+Anonymous sessions are stored in the current browser profile. Clearing browser storage or switching browsers/devices loses access to that anonymous account and its cloud records. Never put a `service_role` or secret key in a `VITE_` variable or browser code.

@@ -16,7 +16,6 @@ import {
   Menu,
   Plus,
   Search,
-  Settings2,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
@@ -76,6 +75,7 @@ function App() {
   const [note, setNote] = useState('一位新骑士为了周末跑山来店里看车。聊到后续用车，他提了护杠、尾箱和轻度改装——这周已经是第三次听到类似需求。')
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured)
+  const [authError, setAuthError] = useState('')
   const [journalLoading, setJournalLoading] = useState(false)
   const [journalSaving, setJournalSaving] = useState(false)
   const [journalLoaded, setJournalLoaded] = useState(false)
@@ -86,20 +86,38 @@ function App() {
   const title = location.pathname === '/daily' ? '每日记录' : location.pathname === '/customers' ? '顾客需求' : '经营总览'
   const recordDate = todayRecordDate()
 
+  async function connectAnonymous() {
+    if (!supabase) return
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const { data, error } = await supabase.auth.getSession()
+      if (error) throw error
+      if (data.session) {
+        setUser(data.session.user)
+        return
+      }
+      const { data: anonymous, error: signInError } = await supabase.auth.signInAnonymously()
+      if (signInError) throw signInError
+      setUser(anonymous.user)
+    } catch {
+      setUser(null)
+      setAuthError('匿名云端连接失败。请确认 Supabase 已开启匿名登录，并检查网络后重试。')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (!supabase) return
     let active = true
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return
-      if (error) setJournalError('无法确认登录状态，请刷新后重试。')
-      setUser(data.session?.user ?? null)
-      setAuthLoading(false)
-    })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session: Session | null) => {
+      if (!active) return
       setUser(session?.user ?? null)
       setAuthLoading(false)
-      setJournalError('')
+      if (session) setAuthError('')
     })
+    void connectAnonymous()
     return () => { active = false; subscription.unsubscribe() }
   }, [])
 
@@ -138,7 +156,7 @@ function App() {
 
   async function saveJournal() {
     if (!supabase || !user) {
-      notify('请先登录，才能保存到云端。')
+      notify('云端尚未连接，请检查每日记录页的连接状态。')
       return false
     }
     setJournalSaving(true)
@@ -178,16 +196,16 @@ function App() {
         </nav>
 
         <div className="sidebar-note"><div className="note-stamp"><Sparkles size={15} /></div><span className="section-kicker">GROWTH SIGNAL</span><strong>机会来自重复</strong><p>留下真实需求，让趋势自己说话。</p><div className="note-progress"><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /></div><div className="note-foot"><span>改装需求</span><b>16 / 20</b></div></div>
-        <div className="sidebar-bottom"><button className="side-action" type="button" onClick={() => notify('帮助中心将在后续版本开放。')}><CircleHelp size={16} />使用说明</button><button className="profile-button" type="button" onClick={async () => { if (!supabase) { navigate('/daily'); return } if (user) { await supabase.auth.signOut(); notify('已退出登录。') } else navigate('/daily') }}><div className="profile-avatar">{user?.email?.slice(0, 1).toUpperCase() ?? '林'}</div><div className="profile-copy"><strong>{user?.email ?? '门店主理人'}</strong><span>{user ? '已登录云端账户 · 点击退出' : '登录以保存云端记录'}</span></div><Settings2 size={16} /></button></div>
+        <div className="sidebar-bottom"><button className="side-action" type="button" onClick={() => notify('帮助中心将在后续版本开放。')}><CircleHelp size={16} />使用说明</button><div className="profile-button"><div className="profile-avatar">林</div><div className="profile-copy"><strong>门店主理人</strong><span>{user ? '匿名云端已连接' : isSupabaseConfigured ? '正在连接云端…' : '本地演示模式'}</span></div></div></div>
       </aside>
 
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumbs"><button className="mobile-menu" aria-label="打开菜单" type="button"><Menu size={18} /></button><span>栖点</span><span className="crumb-slash">/</span><strong>{title}</strong></div><div className="topbar-actions"><div className="demo-badge"><span />{user ? '云端已连接' : isSupabaseConfigured ? '登录后连接' : '演示数据'}</div><div className="today-chip"><CalendarDays size={14} /><span>{dates.short}</span></div><button className="icon-button" aria-label="搜索" type="button" onClick={() => notify('搜索功能将在后续版本开放。')}><Search size={17} /></button><div className="topbar-divider" /><button className="quick-add" type="button" onClick={() => navigate('/daily')}><Plus size={15} /><span>记一笔</span></button></div></header>
+        <header className="topbar"><div className="breadcrumbs"><button className="mobile-menu" aria-label="打开菜单" type="button"><Menu size={18} /></button><span>栖点</span><span className="crumb-slash">/</span><strong>{title}</strong></div><div className="topbar-actions"><div className="demo-badge"><span />{user ? '云端匿名模式' : isSupabaseConfigured ? '正在连接云端' : '演示数据'}</div><div className="today-chip"><CalendarDays size={14} /><span>{dates.short}</span></div><button className="icon-button" aria-label="搜索" type="button" onClick={() => notify('搜索功能将在后续版本开放。')}><Search size={17} /></button><div className="topbar-divider" /><button className="quick-add" type="button" onClick={() => navigate('/daily')}><Plus size={15} /><span>记一笔</span></button></div></header>
 
         <div className="page-content">
           <Routes>
             <Route path="/" element={<Dashboard dates={dates} sales={sales} needs={needs} note={isSupabaseConfigured && !user ? '' : note} revenue={revenue} setNote={setNote} openModal={setModal} notify={notify} onSaveNote={saveJournal} user={user} saving={journalSaving} configured={isSupabaseConfigured} />} />
-            <Route path="/daily" element={<DailyPage dates={dates} sales={sales} note={note} revenue={revenue} setNote={setNote} openSale={() => setModal('sale')} user={user} configured={isSupabaseConfigured} authLoading={authLoading} journalLoading={journalLoading} journalSaving={journalSaving} journalLoaded={journalLoaded} journalError={journalError} onSaveNote={saveJournal} />} />
+            <Route path="/daily" element={<DailyPage dates={dates} sales={sales} note={note} revenue={revenue} setNote={setNote} openSale={() => setModal('sale')} user={user} configured={isSupabaseConfigured} authLoading={authLoading} authError={authError} journalLoading={journalLoading} journalSaving={journalSaving} journalLoaded={journalLoaded} journalError={journalError} onRetry={connectAnonymous} onSaveNote={saveJournal} />} />
             <Route path="/customers" element={<CustomersPage needs={needs} openNeed={() => setModal('need')} />} />
           </Routes>
           <footer className="page-footer"><span>栖点 · 门店经营情报</span><span>记录今天，发现下一次机会。</span></footer>
@@ -240,7 +258,7 @@ function Dashboard({ dates, sales, needs, note, revenue, setNote, openModal, not
     </section>
 
     <section className="dashboard-grid">
-      <article className="panel daily-panel"><div className="panel-head"><div><span className="section-kicker">TODAY'S JOURNAL</span><h2>今天发生了什么</h2></div><span className="panel-date"><Clock3 size={13} />今天 · 营业记录</span></div><textarea className="journal-input" value={note} onChange={(event) => { setNote(event.target.value); setSaved(false) }} aria-label="今天发生了什么" placeholder={user ? '写下今天值得留下的事…' : '登录后开始记录今日门店情况'} /><div className="panel-foot"><span className="privacy-note"><ShieldCheck size={14} />{user ? '仅自己可见 · 保存到 Supabase' : configured ? '登录后安全保存到云端' : '仅为本地演示内容'}</span><button className="primary-button" type="button" disabled={saving} onClick={async () => { if (user) { const ok = await onSaveNote(); if (ok) setSaved(true) } else if (configured) notify('请先进入每日记录并登录。'); else { setSaved(true); notify('演示记录已暂存，刷新页面会恢复示例内容。') } }}>{saving ? '保存中…' : saved ? <><Check size={14} />已保存</> : <>保存今天 <ArrowRight size={14} /></>}</button></div></article>
+      <article className="panel daily-panel"><div className="panel-head"><div><span className="section-kicker">TODAY'S JOURNAL</span><h2>今天发生了什么</h2></div><span className="panel-date"><Clock3 size={13} />今天 · 营业记录</span></div><textarea className="journal-input" value={note} onChange={(event) => { setNote(event.target.value); setSaved(false) }} aria-label="今天发生了什么" placeholder={user ? '写下今天值得留下的事…' : configured ? '正在连接安全的云端记录…' : '开始记录今日门店情况'} /><div className="panel-foot"><span className="privacy-note"><ShieldCheck size={14} />{user ? '仅自己可见 · 自动匿名云端保存' : configured ? '正在建立匿名云端会话' : '仅为本地演示内容'}</span><button className="primary-button" type="button" disabled={saving} onClick={async () => { if (user) { const ok = await onSaveNote(); if (ok) setSaved(true) } else if (configured) notify('云端尚未连接，请检查每日记录页的连接状态。'); else { setSaved(true); notify('演示记录已暂存，刷新页面会恢复示例内容。') } }}>{saving ? '保存中…' : saved ? <><Check size={14} />已保存</> : <>保存今天 <ArrowRight size={14} /></>}</button></div></article>
 
       <article className="panel signals-panel"><div className="panel-head"><div><span className="section-kicker">DEMAND SIGNALS · OCT</span><h2>重复出现的需求</h2></div><button className="period-button" type="button" onClick={() => notify('当前展示 10 月演示数据。')}>本月 <ChevronDown size={13} /></button></div><div className="signals-intro"><div className="signal-stamp"><Sparkles size={17} /></div><p>一个月出现 <strong>20 次</strong><br />它就值得被认真看见。</p></div><div className="signal-rows"><SignalRow label="改装" count={16} color="wine" /><SignalRow label="配件" count={11} color="navy" /><SignalRow label="头盔" count={7} color="slate" /></div><div className="signals-foot"><span>本月最接近的机会</span><strong>改装 · 还差 4 次</strong><ArrowDownRight size={15} /></div></article>
     </section>
@@ -255,50 +273,21 @@ function SignalRow({ label, count, color }: { label: string; count: number; colo
   return <div className="signal-row"><span className={`signal-label ${color}`}>{label}</span><div className="signal-track"><span className={color} style={{ width: `${Math.min(count / 20 * 100, 100)}%` }} /></div><strong>{count}<small> / 20</small></strong></div>
 }
 
-function DailyPage({ dates, sales, note, revenue, setNote, openSale, user, configured, authLoading, journalLoading, journalSaving, journalLoaded, journalError, onSaveNote }: {
+function DailyPage({ dates, sales, note, revenue, setNote, openSale, user, configured, authLoading, authError, journalLoading, journalSaving, journalLoaded, journalError, onRetry, onSaveNote }: {
   dates: ReturnType<typeof dateLabels>; sales: Sale[]; note: string; revenue: number; setNote: (value: string) => void; openSale: () => void;
-  user: User | null; configured: boolean; authLoading: boolean; journalLoading: boolean; journalSaving: boolean; journalLoaded: boolean; journalError: string; onSaveNote: () => Promise<boolean>
+  user: User | null; configured: boolean; authLoading: boolean; authError: string; journalLoading: boolean; journalSaving: boolean; journalLoaded: boolean; journalError: string; onRetry: () => void; onSaveNote: () => Promise<boolean>
 }) {
   const journalAccess = !configured
     ? <div className="connection-notice"><strong>连接配置还差一步</strong><p>在项目根目录的 <code>.env.local</code> 中填入 Supabase 公开 anon / publishable key，再重启本地服务。</p></div>
     : authLoading
-      ? <div className="connection-notice">正在确认登录状态…</div>
+      ? <div className="connection-notice">正在建立匿名云端连接…</div>
       : !user
-        ? <MagicLinkCard />
+        ? <div className="connection-notice"><strong>暂时无法连接云端</strong><p>{authError || '请检查 Supabase 项目的匿名登录设置和网络连接。'}</p><button className="primary-button" type="button" onClick={onRetry}>重试连接 <ArrowRight size={14} /></button></div>
         : journalLoading
           ? <div className="connection-notice">正在读取今天的云端记录…</div>
           : <textarea className="journal-input expanded" value={note} onChange={(event) => setNote(event.target.value)} aria-label="今天发生了什么" placeholder="写下今天值得留下的事…" />
 
-  return <><div className="subpage-heading"><div><span className="section-kicker">DAILY JOURNAL</span><h1>每日记录<span className="heading-period">{dates.full}</span></h1><p>把今天值得留下的事和经营数字，放在一起看。</p></div><div className="demo-badge"><span />{user ? '云端记录' : '演示数据'}</div></div><div className="daily-page-grid"><article className="panel daily-page-note"><div className="panel-head"><div><span className="section-kicker">STORE NOTE</span><h2>今天发生了什么</h2></div><span className="panel-date">{journalLoaded ? '已从云端读取' : '今天'}</span></div>{journalAccess}{journalError && <p className="journal-error" role="alert">{journalError}</p>}{user && <button className="primary-button" type="button" disabled={journalLoading || journalSaving} onClick={onSaveNote}>{journalSaving ? '保存中…' : <>保存今天 <ArrowRight size={14} /></>}</button>}</article><article className="panel daily-page-sales"><div className="panel-head"><div><span className="section-kicker">SALES ACTIVITY</span><h2>产生销售额的事项</h2></div><button className="inline-link" type="button" onClick={openSale}><Plus size={14} />添加事项</button></div><div className="sale-list">{sales.map((sale) => <div className="sale-row" key={sale.id}><span className={`sale-category ${sale.category === '实体车' ? 'bike' : ''}`}>{sale.category === '实体车' ? <Bike size={15} /> : sale.category.slice(0, 1)}</span><div className="sale-name"><strong>{sale.name}</strong><span>{sale.category} <i>·</i> {sale.time}</span></div><strong className="sale-amount">{sale.amount < 0 ? '−' : '+'}¥{Math.abs(sale.amount).toLocaleString('zh-CN')}</strong></div>)}</div><div className="list-total"><span>每日营业额</span><strong>¥ {revenue.toLocaleString('zh-CN')}.00</strong></div></article></div><div className="demo-footnote"><span className="demo-footnote-mark">i</span>{user ? '今日门店记录保存在 Supabase；销售事项仍为示例数据。' : '登录配置完成后，今日门店记录会保存在 Supabase。销售事项接入在后续步骤。'}</div></>
-}
-
-function MagicLinkCard() {
-  const [email, setEmail] = useState('')
-  const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
-  const [error, setError] = useState('')
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!supabase) return
-    setSending(true)
-    setError('')
-    const { error: signInError } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    })
-    setSending(false)
-    if (signInError) setError('登录邮件发送失败，请检查邮箱或 Supabase 邮件设置后重试。')
-    else setSent(true)
-  }
-
-  return <form className="magic-link-card" onSubmit={submit}>
-    <div className="auth-lock"><ShieldCheck size={17} /></div>
-    <strong>{sent ? '请查看你的邮箱' : '登录后安全保存到云端'}</strong>
-    <p>{sent ? `登录链接已发送至 ${email}，点击邮件中的链接返回工作台。` : '输入自己的邮箱，我们会发送一次性登录链接，不需要设置密码。'}</p>
-    {!sent && <><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="你的邮箱地址" autoComplete="email" required /><button className="primary-button" type="submit" disabled={sending}>{sending ? '发送中…' : '发送登录链接'} <ArrowRight size={14} /></button></>}
-    {error && <span className="journal-error" role="alert">{error}</span>}
-  </form>
+  return <><div className="subpage-heading"><div><span className="section-kicker">DAILY JOURNAL</span><h1>每日记录<span className="heading-period">{dates.full}</span></h1><p>把今天值得留下的事和经营数字，放在一起看。</p></div><div className="demo-badge"><span />{user ? '匿名云端记录' : configured ? '云端连接中' : '演示数据'}</div></div><div className="daily-page-grid"><article className="panel daily-page-note"><div className="panel-head"><div><span className="section-kicker">STORE NOTE</span><h2>今天发生了什么</h2></div><span className="panel-date">{journalLoaded ? '已从云端读取' : '今天'}</span></div>{journalAccess}{journalError && <p className="journal-error" role="alert">{journalError}</p>}{user && <button className="primary-button" type="button" disabled={journalLoading || journalSaving} onClick={onSaveNote}>{journalSaving ? '保存中…' : <>保存今天 <ArrowRight size={14} /></>}</button>}</article><article className="panel daily-page-sales"><div className="panel-head"><div><span className="section-kicker">SALES ACTIVITY</span><h2>产生销售额的事项</h2></div><button className="inline-link" type="button" onClick={openSale}><Plus size={14} />添加事项</button></div><div className="sale-list">{sales.map((sale) => <div className="sale-row" key={sale.id}><span className={`sale-category ${sale.category === '实体车' ? 'bike' : ''}`}>{sale.category === '实体车' ? <Bike size={15} /> : sale.category.slice(0, 1)}</span><div className="sale-name"><strong>{sale.name}</strong><span>{sale.category} <i>·</i> {sale.time}</span></div><strong className="sale-amount">{sale.amount < 0 ? '−' : '+'}¥{Math.abs(sale.amount).toLocaleString('zh-CN')}</strong></div>)}</div><div className="list-total"><span>每日营业额</span><strong>¥ {revenue.toLocaleString('zh-CN')}.00</strong></div></article></div><div className="demo-footnote"><span className="demo-footnote-mark">i</span>{user ? '今日门店记录保存在 Supabase 匿名账户中；只能在当前浏览器找回。销售事项仍为示例数据。' : configured ? '匿名云端连接失败时，请确认项目已开启匿名登录。' : '连接配置完成后，今日门店记录会保存在 Supabase。销售事项接入在后续步骤。'}</div></>
 }
 
 function CustomersPage({ needs, openNeed }: { needs: Need[]; openNeed: () => void }) {
