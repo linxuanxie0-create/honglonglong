@@ -35,6 +35,12 @@ type SaleCategory = '实体车' | '头盔' | '配件' | '改装' | '其他'
 type Sale = { id: number; category: SaleCategory; name: string; amount: number; time: string }
 type Need = CustomerResearchRecord
 
+function logCurrentSupabaseUser(user: User | null) {
+  console.info('[Supabase] current user', {
+    userId: user?.id ?? null,
+  })
+}
+
 const initialSales: Sale[] = [
   { id: 1, category: '实体车', name: '450MT', amount: 26800, time: '15:42' },
   { id: 2, category: '头盔', name: '全盔 · 哑光黑', amount: 1280, time: '14:18' },
@@ -128,11 +134,13 @@ function App() {
       if (error) throw error
       if (data.session) {
         setUser(data.session.user)
+        logCurrentSupabaseUser(data.session.user)
         return
       }
       const { data: anonymous, error: signInError } = await supabase.auth.signInAnonymously()
       if (signInError) throw signInError
       setUser(anonymous.user)
+      logCurrentSupabaseUser(anonymous.user)
     } catch (error) {
       logSupabaseError('anonymous sign-in / session', error)
       setUser(null)
@@ -148,6 +156,7 @@ function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session: Session | null) => {
       if (!active) return
       setUser(session?.user ?? null)
+      logCurrentSupabaseUser(session?.user ?? null)
       setAuthLoading(false)
       if (session) setAuthError('')
     })
