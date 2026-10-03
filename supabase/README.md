@@ -10,6 +10,10 @@ Open the project's SQL Editor and run the migration in `migrations/2026100209000
 - `sales`: dated motorcycle, helmet, accessory, modification, and other sales. Refunds are negative amounts; motorcycles store a model only.
 - `customer_needs`: a date and the two free-text fields for purchase reason and possible future needs.
 
+After the base migration, run `migrations/20261003120000_add_customer_research_fields.sql` to add optional audience research fields to `customer_needs`: gender, age range, hometown province, broad residence area, store discovery source, payer, decision maker, core needs, and a short core-needs note. No name, phone number, or detailed address is collected. Existing rows remain valid and the new fields are blank until you choose to fill them in.
+
+The app adds a **人群调研** page with month and all-record filters. Counts use each visit note as one record; one person visiting more than once can therefore appear more than once. Core needs are multi-select, so their percentages can add up to more than 100%.
+
 Row Level Security is enabled on every table. Policies permit authenticated users, including anonymous sessions, to read and change rows where `user_id` matches their own Supabase user ID. The migration adds no example customer records.
 
 ## Configure the local app

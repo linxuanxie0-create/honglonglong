@@ -6,6 +6,7 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
+  BarChart3,
   Bike,
   CalendarDays,
   Check,
@@ -23,11 +24,16 @@ import {
   X,
 } from 'lucide-react'
 import LetterSwapText from './components/letter-swap-text'
+import CustomerResearchForm from './components/customer-research-form'
+import CustomerResearchStats from './components/customer-research-stats'
+import type { CustomerResearchDraft, CustomerResearchRecord } from './lib/customer-research'
+import { labelFor } from './lib/customer-research'
+import { loadCustomerResearch, saveCustomerResearch } from './lib/customer-research-data'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
 
 type SaleCategory = '实体车' | '头盔' | '配件' | '改装' | '其他'
 type Sale = { id: number; category: SaleCategory; name: string; amount: number; time: string }
-type Need = { id: number; reason: string; future: string; time: string }
+type Need = CustomerResearchRecord
 
 const initialSales: Sale[] = [
   { id: 1, category: '实体车', name: '450MT', amount: 26800, time: '15:42' },
@@ -36,15 +42,40 @@ const initialSales: Sale[] = [
 ]
 
 const initialNeeds: Need[] = [
-  { id: 1, reason: '周末想和朋友跑山，想换一台更轻便的车。', future: '护杠、尾箱，之后可能会做轻度改装。', time: '15:20' },
-  { id: 2, reason: '第一次买车，主要是上下班通勤。', future: '通勤头盔、防水手套。', time: '13:45' },
+  { ...emptyNeed('demo-1'), purchase_reason: '周末想和朋友跑山，想换一台更轻便的车。', future_needs: '护杠、尾箱，之后可能会做轻度改装。', time: '15:20' },
+  { ...emptyNeed('demo-2'), purchase_reason: '第一次买车，主要是上下班通勤。', future_needs: '通勤头盔、防水手套。', time: '13:45' },
 ]
 
 const links = [
   { to: '/', label: '经营总览', icon: LayoutDashboard, end: true },
   { to: '/daily', label: '每日记录', icon: CalendarDays },
   { to: '/customers', label: '顾客需求', icon: UsersRound },
+  { to: '/research', label: '人群调研', icon: BarChart3 },
 ]
+
+function emptyNeed(id: string): Need {
+  return {
+    id,
+    recorded_on: todayRecordDate(),
+    purchase_reason: '',
+    future_needs: '',
+    gender: null,
+    age_group: null,
+    hometown_province: null,
+    residence_area: null,
+    discovery_source: null,
+    payer_role: null,
+    decision_role: null,
+    core_needs: [],
+    core_need_note: null,
+  }
+}
+
+function needTime(need: Need) {
+  if (need.time) return need.time
+  if (need.created_at) return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' }).format(new Date(need.created_at))
+  return need.recorded_on
+}
 
 function dateLabels() {
   const now = new Date()
@@ -71,7 +102,7 @@ function App() {
   const navigate = useNavigate()
   const dates = dateLabels()
   const [sales, setSales] = useState(initialSales)
-  const [needs, setNeeds] = useState(initialNeeds)
+  const [needs, setNeeds] = useState<Need[]>(isSupabaseConfigured ? [] : initialNeeds)
   const [note, setNote] = useState('一位新骑士为了周末跑山来店里看车。聊到后续用车，他提了护杠、尾箱和轻度改装——这周已经是第三次听到类似需求。')
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured)
@@ -80,10 +111,12 @@ function App() {
   const [journalSaving, setJournalSaving] = useState(false)
   const [journalLoaded, setJournalLoaded] = useState(false)
   const [journalError, setJournalError] = useState('')
+  const [customerLoading, setCustomerLoading] = useState(isSupabaseConfigured)
+  const [customerError, setCustomerError] = useState('')
   const [modal, setModal] = useState<'sale' | 'need' | null>(null)
   const [toast, setToast] = useState('')
   const revenue = useMemo(() => sales.reduce((sum, item) => sum + item.amount, 0), [sales])
-  const title = location.pathname === '/daily' ? '每日记录' : location.pathname === '/customers' ? '顾客需求' : '经营总览'
+  const title = location.pathname === '/daily' ? '每日记录' : location.pathname === '/customers' ? '顾客需求' : location.pathname === '/research' ? '人群调研' : '经营总览'
   const recordDate = todayRecordDate()
 
   async function connectAnonymous() {
@@ -149,6 +182,29 @@ function App() {
     return () => { active = false }
   }, [user, recordDate])
 
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setNeeds(initialNeeds)
+      setCustomerLoading(false)
+      return
+    }
+    if (authLoading) return
+    if (!supabase || !user) {
+      setNeeds([])
+      setCustomerLoading(false)
+      setCustomerError(authError || '匿名云端未连接，暂时无法读取顾客调研记录。')
+      return
+    }
+    let active = true
+    setCustomerLoading(true)
+    setCustomerError('')
+    void loadCustomerResearch(user)
+      .then((records) => { if (active) setNeeds(records) })
+      .catch(() => { if (active) setCustomerError('顾客调研读取失败。请确认数据库迁移已运行，然后重试。') })
+      .finally(() => { if (active) setCustomerLoading(false) })
+    return () => { active = false }
+  }, [user, authLoading, authError])
+
   function notify(message: string) {
     setToast(message)
     window.setTimeout(() => setToast(''), 2600)
@@ -181,6 +237,47 @@ function App() {
     }
   }
 
+  async function saveNeed(draft: CustomerResearchDraft) {
+    if (isSupabaseConfigured) {
+      if (!supabase || !user) {
+        setCustomerError('匿名云端尚未连接，调研记录还没有保存。')
+        notify('云端尚未连接，记录未保存。')
+        return false
+      }
+      try {
+        const saved = await saveCustomerResearch(user, draft)
+        setNeeds((current) => [saved, ...current])
+        setCustomerError('')
+        notify('顾客调研已保存到云端。')
+        return true
+      } catch {
+        setCustomerError('顾客调研保存失败。请检查新迁移是否已运行，然后重试。')
+        notify('保存失败，表单内容仍保留。')
+        return false
+      }
+    }
+    setNeeds((current) => [{ ...draft, id: `demo-${Date.now()}` }, ...current])
+    notify('演示记录已添加，刷新页面会重置。')
+    return true
+  }
+
+  async function reloadCustomerResearch() {
+    if (!supabase) return
+    if (!user) {
+      await connectAnonymous()
+      return
+    }
+    setCustomerLoading(true)
+    setCustomerError('')
+    try {
+      setNeeds(await loadCustomerResearch(user))
+    } catch {
+      setCustomerError('顾客调研读取失败。请确认数据库迁移已运行，然后重试。')
+    } finally {
+      setCustomerLoading(false)
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -206,15 +303,16 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard dates={dates} sales={sales} needs={needs} note={isSupabaseConfigured && !user ? '' : note} revenue={revenue} setNote={setNote} openModal={setModal} notify={notify} onSaveNote={saveJournal} user={user} saving={journalSaving} configured={isSupabaseConfigured} />} />
             <Route path="/daily" element={<DailyPage dates={dates} sales={sales} note={note} revenue={revenue} setNote={setNote} openSale={() => setModal('sale')} user={user} configured={isSupabaseConfigured} authLoading={authLoading} authError={authError} journalLoading={journalLoading} journalSaving={journalSaving} journalLoaded={journalLoaded} journalError={journalError} onRetry={connectAnonymous} onSaveNote={saveJournal} />} />
-            <Route path="/customers" element={<CustomersPage needs={needs} openNeed={() => setModal('need')} />} />
+            <Route path="/customers" element={<CustomersPage needs={needs} openNeed={() => setModal('need')} loading={customerLoading} error={customerError} configured={isSupabaseConfigured} />} />
+            <Route path="/research" element={<CustomerResearchStats records={needs} loading={customerLoading} error={customerError} configured={isSupabaseConfigured} onRetry={reloadCustomerResearch} />} />
           </Routes>
           <footer className="page-footer"><span>栖点 · 门店经营情报</span><span>记录今天，发现下一次机会。</span></footer>
         </div>
       </main>
 
-      {modal && <EntryModal type={modal} close={() => setModal(null)} onSave={(entry) => {
-        if ('category' in entry) setSales((current) => [{ ...entry, id: Date.now(), time: '刚刚' }, ...current])
-        else setNeeds((current) => [{ ...entry, id: Date.now(), time: '刚刚' }, ...current])
+      {modal === 'need' && <CustomerResearchForm close={() => setModal(null)} onSave={saveNeed} />}
+      {modal === 'sale' && <EntryModal close={() => setModal(null)} onSave={(entry) => {
+        setSales((current) => [{ ...entry, id: Date.now(), time: '刚刚' }, ...current])
         setModal(null)
         notify('已加入本次演示记录（刷新后会重置）')
       }} />}
@@ -254,7 +352,7 @@ function Dashboard({ dates, sales, needs, note, revenue, setNote, openModal, not
     <section className="stats-grid" aria-label="今日经营数据">
       <article className="stat-card stat-revenue"><div className="stat-top"><span>今日营业额</span><span className="stat-icon"><ShoppingBag size={16} /></span></div><div className="stat-value"><small>¥</small>{revenue.toLocaleString('zh-CN')}<i>.00</i></div><div className="stat-bottom"><span className="stat-trend"><ArrowUpRight size={13} />销售事项合计</span><span className="stat-caption">TODAY'S REVENUE</span></div></article>
       <article className="stat-card"><div className="stat-top"><span>销售事项</span><span className="stat-icon navy"><Bike size={16} /></span></div><div className="stat-value">{sales.length}<i className="unit">笔</i></div><div className="stat-bottom"><span className="stat-caption">实体车与其他销售</span><span className="stat-caption">SALES</span></div></article>
-      <article className="stat-card"><div className="stat-top"><span>顾客需求</span><span className="stat-icon pink"><UsersRound size={16} /></span></div><div className="stat-value">{needs.length + 2}<i className="unit">位</i></div><div className="stat-bottom"><span className="stat-caption">今天留下的真实声音</span><span className="stat-caption">CUSTOMER VOICE</span></div></article>
+      <article className="stat-card"><div className="stat-top"><span>顾客需求</span><span className="stat-icon pink"><UsersRound size={16} /></span></div><div className="stat-value">{needs.length}<i className="unit">条</i></div><div className="stat-bottom"><span className="stat-caption">已记录的接待需求</span><span className="stat-caption">CUSTOMER VOICE</span></div></article>
     </section>
 
     <section className="dashboard-grid">
@@ -264,7 +362,7 @@ function Dashboard({ dates, sales, needs, note, revenue, setNote, openModal, not
     </section>
 
     <section className="bottom-grid"><article className="panel transactions-panel"><div className="panel-head"><div><span className="section-kicker">SALES ACTIVITY</span><h2>今日销售事项</h2></div><button className="inline-link" type="button" onClick={() => openModal('sale')}><Plus size={14} />添加事项</button></div><div className="sale-list">{sales.slice(0, 4).map((sale) => <div className="sale-row" key={sale.id}><span className={`sale-category ${sale.category === '实体车' ? 'bike' : ''}`}>{sale.category === '实体车' ? <Bike size={15} /> : sale.category.slice(0, 1)}</span><div className="sale-name"><strong>{sale.name}</strong><span>{sale.category} <i>·</i> {sale.time}</span></div><strong className="sale-amount">{sale.amount < 0 ? '−' : '+'}¥{Math.abs(sale.amount).toLocaleString('zh-CN')}</strong></div>)}</div><div className="list-total"><span>今日合计</span><strong>¥ {revenue.toLocaleString('zh-CN')}.00</strong></div></article>
-      <article className="panel customer-panel"><div className="panel-head"><div><span className="section-kicker">CUSTOMER NOTES</span><h2>顾客的下一步</h2></div><button className="inline-link" type="button" onClick={() => openModal('need')}><Plus size={14} />记录需求</button></div><div className="need-list">{needs.slice(0, 2).map((need) => <div className="need-item" key={need.id}><span className="need-mark"><UsersRound size={14} /></span><div><p>{need.reason}</p><div className="need-next"><span>未来可能</span>{need.future}</div></div><span className="need-time">{need.time}</span></div>)}</div><button className="see-all" type="button" onClick={() => window.location.assign('/customers')}>查看全部顾客需求 <ArrowRight size={13} /></button></article></section>
+      <article className="panel customer-panel"><div className="panel-head"><div><span className="section-kicker">CUSTOMER NOTES</span><h2>顾客的下一步</h2></div><button className="inline-link" type="button" onClick={() => openModal('need')}><Plus size={14} />记录需求</button></div><div className="need-list">{needs.slice(0, 2).map((need) => <div className="need-item" key={need.id}><span className="need-mark"><UsersRound size={14} /></span><div><p>{need.purchase_reason || need.core_need_note || '已记录顾客调研'}</p><div className="need-next"><span>未来可能</span>{need.future_needs || (need.core_needs.length ? need.core_needs.map((value) => labelFor('core_needs', value)).join('、') : '暂未填写')}</div></div><span className="need-time">{needTime(need)}</span></div>)}</div><NavLink className="see-all" to="/customers">查看全部顾客需求 <ArrowRight size={13} /></NavLink></article></section>
     <div className="demo-footnote"><span className="demo-footnote-mark">i</span>当前展示为演示数据，可通过「添加事项」「记录需求」体验操作；数据暂存在页面内存中，刷新后恢复示例内容。</div>
   </>
 }
@@ -290,21 +388,19 @@ function DailyPage({ dates, sales, note, revenue, setNote, openSale, user, confi
   return <><div className="subpage-heading"><div><span className="section-kicker">DAILY JOURNAL</span><h1>每日记录<span className="heading-period">{dates.full}</span></h1><p>把今天值得留下的事和经营数字，放在一起看。</p></div><div className="demo-badge"><span />{user ? '匿名云端记录' : configured ? '云端连接中' : '演示数据'}</div></div><div className="daily-page-grid"><article className="panel daily-page-note"><div className="panel-head"><div><span className="section-kicker">STORE NOTE</span><h2>今天发生了什么</h2></div><span className="panel-date">{journalLoaded ? '已从云端读取' : '今天'}</span></div>{journalAccess}{journalError && <p className="journal-error" role="alert">{journalError}</p>}{user && <button className="primary-button" type="button" disabled={journalLoading || journalSaving} onClick={onSaveNote}>{journalSaving ? '保存中…' : <>保存今天 <ArrowRight size={14} /></>}</button>}</article><article className="panel daily-page-sales"><div className="panel-head"><div><span className="section-kicker">SALES ACTIVITY</span><h2>产生销售额的事项</h2></div><button className="inline-link" type="button" onClick={openSale}><Plus size={14} />添加事项</button></div><div className="sale-list">{sales.map((sale) => <div className="sale-row" key={sale.id}><span className={`sale-category ${sale.category === '实体车' ? 'bike' : ''}`}>{sale.category === '实体车' ? <Bike size={15} /> : sale.category.slice(0, 1)}</span><div className="sale-name"><strong>{sale.name}</strong><span>{sale.category} <i>·</i> {sale.time}</span></div><strong className="sale-amount">{sale.amount < 0 ? '−' : '+'}¥{Math.abs(sale.amount).toLocaleString('zh-CN')}</strong></div>)}</div><div className="list-total"><span>每日营业额</span><strong>¥ {revenue.toLocaleString('zh-CN')}.00</strong></div></article></div><div className="demo-footnote"><span className="demo-footnote-mark">i</span>{user ? '今日门店记录保存在 Supabase 匿名账户中；只能在当前浏览器找回。销售事项仍为示例数据。' : configured ? '匿名云端连接失败时，请确认项目已开启匿名登录。' : '连接配置完成后，今日门店记录会保存在 Supabase。销售事项接入在后续步骤。'}</div></>
 }
 
-function CustomersPage({ needs, openNeed }: { needs: Need[]; openNeed: () => void }) {
-  return <><div className="subpage-heading"><div><span className="section-kicker">CUSTOMER VOICE</span><h1>顾客需求<span className="heading-period">需求是新的起点</span></h1><p>只记下顾客为什么买车，以及他们未来可能需要什么。</p></div><button className="primary-button" type="button" onClick={openNeed}><Plus size={14} />记录一位顾客</button></div><div className="customer-summary"><div><span>本月需求记录</span><strong>{needs.length + 18}<small> 位</small></strong></div><div><span>最常出现的后续需求</span><strong>轻度改装</strong></div><div><span>记录方式</span><strong>自由文字</strong></div></div><section className="customer-records"><div className="panel-head"><div><span className="section-kicker">RECENT NOTES</span><h2>最近记录</h2></div><span className="demo-badge"><span />示例</span></div>{needs.map((need) => <article className="customer-record" key={need.id}><div className="record-avatar"><UsersRound size={16} /></div><div className="record-body"><div className="record-top"><strong>到店顾客</strong><span>今日 · {need.time}</span></div><div className="record-columns"><div><span>购车原因</span><p>{need.reason}</p></div><div><span>未来可能的需求</span><p>{need.future}</p></div></div></div></article>)}</section><div className="demo-footnote"><span className="demo-footnote-mark">i</span>演示内容为虚构示例，真实记录可在后续步骤接入数据库后持续保存。</div></>
+function CustomersPage({ needs, openNeed, loading, error, configured }: { needs: Need[]; openNeed: () => void; loading: boolean; error: string; configured: boolean }) {
+  const thisMonth = todayRecordDate().slice(0, 7)
+  const monthlyCount = needs.filter((need) => need.recorded_on.startsWith(thisMonth)).length
+  return <><div className="subpage-heading"><div><span className="section-kicker">CUSTOMER VOICE</span><h1>顾客需求<span className="heading-period">需求是新的起点</span></h1><p>保留顾客的原话，再记录哪些人群和需求反复出现。</p></div><div className="research-form-actions"><NavLink className="secondary-button" to="/research">查看人群统计 <ArrowRight size={14} /></NavLink><button className="primary-button" type="button" onClick={openNeed}><Plus size={14} />记录一位顾客</button></div></div><div className="customer-summary"><div><span>本月接待记录</span><strong>{monthlyCount}<small> 条</small></strong></div><div><span>累计接待记录</span><strong>{needs.length}<small> 条</small></strong></div><div><span>记录方式</span><strong>匿名调研</strong></div></div>{error && <div className="research-error" role="alert">{error}</div>}<section className="customer-records"><div className="panel-head"><div><span className="section-kicker">RECENT NOTES</span><h2>最近记录</h2></div><span className="demo-badge"><span />{configured ? '云端数据' : '演示数据'}</span></div>{loading ? <div className="research-empty">正在读取顾客记录…</div> : needs.length === 0 ? <div className="research-empty"><strong>还没有顾客记录</strong><p>记录一位顾客后，购车原因和调研信息会显示在这里。</p></div> : needs.map((need) => <article className="customer-record" key={need.id}><div className="record-avatar"><UsersRound size={16} /></div><div className="record-body"><div className="record-top"><strong>到店顾客</strong><span>{need.recorded_on} · {needTime(need)}</span></div><div className="record-columns"><div><span>购车原因</span><p>{need.purchase_reason || '未填写'}</p></div><div><span>未来可能的需求</span><p>{need.future_needs || '未填写'}</p></div></div>{need.core_needs.length > 0 && <div className="research-record-needs"><span>核心需求</span>{need.core_needs.map((value) => <i key={value}>{labelFor('core_needs', value)}</i>)}</div>}</div></article>)}</section><div className="demo-footnote"><span className="demo-footnote-mark">i</span>{configured ? '每次接待记一条，不收集姓名、电话或详细住址。' : '当前为演示模式，新增记录只保存在页面内存中，刷新后会重置。'}</div></>
 }
 
-function EntryModal({ type, close, onSave }: { type: 'sale' | 'need'; close: () => void; onSave: (entry: Omit<Sale, 'id' | 'time'> | Omit<Need, 'id' | 'time'>) => void }) {
+function EntryModal({ close, onSave }: { close: () => void; onSave: (entry: Omit<Sale, 'id' | 'time'>) => void }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    if (type === 'sale') {
-      onSave({ category: form.get('category') as SaleCategory, name: String(form.get('name') || form.get('category')), amount: Number(form.get('amount') || 0) })
-    } else {
-      onSave({ reason: String(form.get('reason') || ''), future: String(form.get('future') || '') })
-    }
+    onSave({ category: form.get('category') as SaleCategory, name: String(form.get('name') || form.get('category')), amount: Number(form.get('amount') || 0) })
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><form className="entry-modal" onSubmit={submit}><div className="modal-head"><div><span className="section-kicker">QUICK ENTRY</span><h2>{type === 'sale' ? '添加销售事项' : '记录顾客需求'}</h2></div><button className="icon-button" type="button" aria-label="关闭" onClick={close}><X size={18} /></button></div>{type === 'sale' ? <><label>销售类别<select name="category"><option>实体车</option><option>头盔</option><option>配件</option><option>改装</option><option>其他</option></select></label><label>事项名称 / 车型型号<input name="name" placeholder="例如：450MT / 护杠安装" /></label><label>金额（退款请填负数）<input name="amount" type="number" step="0.01" placeholder="0.00" required /></label></> : <><label>购车原因<textarea name="reason" placeholder="顾客为什么想买车？" /></label><label>未来可能的需求<textarea name="future" placeholder="配件、头盔、改装或其他想法" /></label></>}<div className="modal-foot"><span>仅为本地演示，刷新后会重置</span><button className="primary-button" type="submit">添加到演示 <ArrowRight size={14} /></button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><form className="entry-modal" onSubmit={submit}><div className="modal-head"><div><span className="section-kicker">QUICK ENTRY</span><h2>添加销售事项</h2></div><button className="icon-button" type="button" aria-label="关闭" onClick={close}><X size={18} /></button></div><label>销售类别<select name="category"><option>实体车</option><option>头盔</option><option>配件</option><option>改装</option><option>其他</option></select></label><label>事项名称 / 车型型号<input name="name" placeholder="例如：450MT / 护杠安装" /></label><label>金额（退款请填负数）<input name="amount" type="number" step="0.01" placeholder="0.00" required /></label><div className="modal-foot"><span>仅为本地演示，刷新后会重置</span><button className="primary-button" type="submit">添加到演示 <ArrowRight size={14} /></button></div></form></div>
 }
 
 export default App
